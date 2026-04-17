@@ -1,5 +1,6 @@
 const express = require('express');
 const app = express();
+const fetch = require('node-fetch');
 const { v4: uuidv4 } = require('uuid');
 const PORT = process.env.PORT || 8000;
 
