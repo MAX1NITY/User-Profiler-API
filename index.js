@@ -37,8 +37,8 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
         return res.status(422).json({
         status: "error",
         message: "Invalid type"
-    });
-}
+            });
+        }
 
         const existingProfile = profiles.find(p => p.data.name.toLowerCase() === name.toLowerCase())
 
@@ -102,8 +102,8 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
             return res.status(502).json({
                 status: "error",
                 message: `${externalApi} returned an invalid response`
-    });
-}
+            });
+        }
 
         console.log("--- API DEBUG ---");
         console.log("Nation Data:", JSON.stringify(nationData, null, 2));
@@ -127,11 +127,11 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
             data: newProfile
         })
 
-    }catch (error) {
+    } catch (error) {
         console.error(error)
         res.status(500).json({status: "error", message: "Upstream or server failure"})
     }
-})
+});
 
 
 
