@@ -84,7 +84,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
                 "status": "error", 
                 "message": `${externalApi} returned an invalid response`
             });
-        }
+        }{
 
         let ageGroupData = "unknown"
 
@@ -109,8 +109,6 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
 console.log("Nation Data:", JSON.stringify(nationData, null, 2));
 
         const newProfile = {
-            status: "success",
-            data: {
                 id: uuidv7(),
                 name : name,
                 gender : genderData?.gender ?? "unknown",
@@ -121,12 +119,13 @@ console.log("Nation Data:", JSON.stringify(nationData, null, 2));
                 country_id: nationData?.country?.[0]?.country_id ?? "unknown",
                 country_probability: nationData?.country?.[0]?.probability ?? 0,
                 created_at: new Date().toISOString()
-
-            }
         }
 
         profiles.push(newProfile)
-        res.status(201).json(newProfile)
+        res.status(201).json({
+            status : "success",
+            data: newProfile
+        })
 
     }catch (error) {
         console.error(error)
