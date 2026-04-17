@@ -40,13 +40,13 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
             });
         }
 
-        const existingProfile = profiles.find(p => p.data.name.toLowerCase() === name.toLowerCase())
+        const existingProfile = profiles.find(p => p.name.toLowerCase() === name.toLowerCase())
 
         if (existingProfile) {
             return res.status(200).json({
                 status: "success",
                 message: "profile already exists",
-                data: existingProfile.data
+                data: existingProfile
             })
         }
 
@@ -62,8 +62,10 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
         const [genderData, ageData, nationData]  = await Promise.all([genderRes.json(), ageRes.json(), nationRes.json()])
         console.log("JSON parsing finished")
 
+        let externalApi = ""
+
         if (genderData.gender === null || genderData.count === 0) {
-            const externalApi = "Genderize"
+            externalApi = "Genderize"
             return res.status(502).json({
                 "status": "error", 
                 "message": `${externalApi} returned an invalid response`
@@ -71,7 +73,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
         }
 
         if (ageData.age === null || ageData.age === undefined) {
-            const externalApi = "Agify"
+            externalApi = "Agify"
             return res.status(502).json({
                 "status": "error", 
                 "message": `${externalApi} returned an invalid response`
@@ -79,7 +81,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
         }
 
         if (!nationData.country || nationData.country.length === 0) {
-            const externalApi = "Nationalize"
+            externalApi = "Nationalize"
             return res.status(502).json({
                 "status": "error", 
                 "message": `${externalApi} returned an invalid response`
@@ -101,6 +103,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
     }
 
         if (genderData.error || ageData.error || nationData.error) {
+            externalApi = "Upstream API"
             return res.status(502).json({
                 status: "error",
                 message: `${externalApi} returned an invalid response`
@@ -144,19 +147,19 @@ app.get(['/api/profiles', '/api/classify'], (req, res) => {
 
     if (gender) {
         filteredProfiles = filteredProfiles.filter(p => 
-            p.data.gender.toLowerCase() === gender.toLowerCase()
+            p.gender.toLowerCase() === gender.toLowerCase()
         )
     }
 
     if (country_id) {
         filteredProfiles = filteredProfiles.filter(p => 
-            p.data.country_id.toLowerCase() === country_id.toLowerCase()
+            p.country_id.toLowerCase() === country_id.toLowerCase()
         )
     }
 
     if (age_group) {
         filteredProfiles = filteredProfiles.filter(p => 
-            p.data.age_group.toLowerCase() === age_group.toLowerCase()
+            p.age_group.toLowerCase() === age_group.toLowerCase()
         )
     }
 
@@ -169,7 +172,7 @@ app.get(['/api/profiles', '/api/classify'], (req, res) => {
 
 app.get(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
     const id = req.params.id
-    const profile = profiles.find(p => p.data.id === id)
+    const profile = profiles.find(p => p.id === id)
 
     if (!profile) {
         return res.status(404).json({ 
@@ -182,7 +185,7 @@ app.get(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
 
 app.delete(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
     const id = req.params.id
-    const index = profiles.findIndex(p => p.data.id === id)
+    const index = profiles.findIndex(p => p.id === id)
 
     if (index === -1) {
         return res.status(404).json({
