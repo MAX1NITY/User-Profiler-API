@@ -121,15 +121,15 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
                 created_at: new Date().toISOString()
         }
 
-        profiles.push(newProfile)
-        res.status(201).json({
+        profiles.push(newProfile);
+        return res.status(201).json({
             status : "success",
             data: newProfile
-        })
+        });
 
     } catch (error) {
         console.error(error)
-        res.status(500).json({status: "error", message: "Upstream or server failure"})
+        return res.status(500).json({status: "error", message: "Upstream or server failure"})
     }
 });
 
