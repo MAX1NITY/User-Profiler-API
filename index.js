@@ -84,7 +84,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
                 "status": "error", 
                 "message": `${externalApi} returned an invalid response`
             });
-        }{
+        }
 
         let ageGroupData = "unknown"
 
@@ -106,7 +106,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
 }
 
         console.log("--- API DEBUG ---");
-console.log("Nation Data:", JSON.stringify(nationData, null, 2));
+        console.log("Nation Data:", JSON.stringify(nationData, null, 2));
 
         const newProfile = {
                 id: uuidv7(),
