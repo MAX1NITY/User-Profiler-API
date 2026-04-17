@@ -1,7 +1,7 @@
 const express = require('express');
 const app = express();
 const fetch = require('node-fetch');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const PORT = process.env.PORT || 8000;
 
 app.listen(PORT, () => {
@@ -88,6 +88,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
 
         let ageGroupData = "unknown"
 
+        if (ageData.age !== null && ageData.age !== undefined){
         if (ageData.age >= 0 && ageData.age <= 12){
             ageGroupData = "child"
         } else if (ageData.age >= 13 && ageData.age <= 19){
@@ -97,6 +98,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
         } else if (ageData.age >= 60){
             ageGroupData = "senior"
         }
+    }
 
         if (genderData.error || ageData.error || nationData.error) {
             return res.status(502).json({
@@ -109,15 +111,15 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
         console.log("Nation Data:", JSON.stringify(nationData, null, 2));
 
         const newProfile = {
-                id: uuidv7(),
+                id: crypto.randomUUID(),
                 name : name,
                 gender : genderData?.gender ?? "unknown",
                 gender_probability : genderData?.probability ?? 0,
                 sample_size : genderData?.count ?? 0,
                 age : ageData?.age ?? 0,
                 age_group: ageGroupData ?? "unknown",
-                country_id: nationData?.country?.[0]?.country_id ?? "unknown",
-                country_probability: nationData?.country?.[0]?.probability ?? 0,
+                country_id: nationData?.country?.[0]?.country_id || "unknown",
+                country_probability: nationData?.country?.[0]?.probability || 0,
                 created_at: new Date().toISOString()
         }
 
