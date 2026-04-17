@@ -25,7 +25,7 @@ app.get('/', (req, res) => {
 });
 
 
-app.post('/api/profiles', async (req, res) => {
+app.post(['/api/profiles', '/api/classify'], async (req, res) => {
     try{
         const name = req.body.name
 
@@ -136,7 +136,7 @@ console.log("Nation Data:", JSON.stringify(nationData, null, 2));
 
 
 
-app.get("/api/profiles", (req, res) => {
+app.get(['/api/profiles', '/api/classify'], (req, res) => {
     let {gender, country_id, age_group} = req.query
 
     let filteredProfiles = [...profiles]
@@ -166,7 +166,7 @@ app.get("/api/profiles", (req, res) => {
     })
 })
 
-app.get("/api/profiles/:id", (req, res) => {
+app.get(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
     const id = req.params.id
     const profile = profiles.find(p => p.data.id === id)
 
@@ -179,7 +179,7 @@ app.get("/api/profiles/:id", (req, res) => {
     res.status(200).json(profile)
 })
 
-app.delete("/api/profiles/:id", (req, res) => {
+app.delete(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
     const id = req.params.id
     const index = profiles.findIndex(p => p.data.id === id)
 
