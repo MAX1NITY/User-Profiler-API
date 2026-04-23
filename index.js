@@ -29,86 +29,74 @@ app.get('/', (req, res) => {
 });
 
 
-app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
+app.get('/api/profiles/search', async (req, res) => {
     try {
-        const { q, name, sort_by, order, page, limit } = req.query;
-        const queryText = q || name || "";
-        
-        // 1. STRICT VALIDATION
-        if (!q && !name) {
-    return res.status(400).json({
-        status: "error",
-        message: "uninterpretable q"
-    });
-}
+        const { q, page, limit, sort_by, order } = req.query;
 
-        const validSorts = ['age', 'gender_probability', 'created_at', 'name'];
-        const sortBy = validSorts.includes(sort_by) ? sort_by : 'created_at';
-        
-        if (sort_by && !validSorts.includes(sort_by)) {
-    return res.status(400).json({
-        status: "error",
-        message: "invalid sort_by"
-    });
-}
+        if (!q) return res.status(400).json({ status: "error", message: "Missing query parameter: q" });
 
-        const p = Number(page) >= 1 ? Number(page) : 1;
-
-let l = Number(limit) || 10;
-if (l > 50) l = 50;   // cap
-if (l < 1) l = 1;
-
-const offset = (p - 1) * l;
-
-        let ascending;
-
-if (order === 'asc') ascending = true;
-else if (order === 'desc' || !order) ascending = false;
-else {
-    return res.status(400).json({
-        status: "error",
-        message: "invalid order"
-    });
-}
-        const filters = extractFilters(queryText);
-
-        // 3. DATABASE CALL
-        let query = supabase
-            .from('profiles')
-            .select('*', { count: 'exact' })
-            .order(sortBy, { ascending })
-            .range(offset, offset + l - 1);
-
-        // Apply filters...
-        if (filters.gender) query = query.eq('gender', filters.gender);
-        if (filters.country_id) query = query.eq('country_id', filters.country_id.toUpperCase());
-        if (filters.age_group) query = query.eq('age_group', filters.age_group);
-        if (filters.min_age) query = query.gte('age', filters.min_age);
-        if (filters.max_age) query = query.lte('age', filters.max_age);
-
-        if (!Object.keys(filters).length) {
-            query = query.ilike('name', `%${queryText}%`);
+        if (/^[^a-zA-Z]+$/.test(q)) {
+            return res.status(422).json({ status: "error", message: "Invalid parameter type" });
         }
 
-        let { data, count, error } = await query;
-        if (error) throw error;
+        // Valid sort columns
+        const validSortColumns = ['age', 'created_at', 'gender_probability', 'name'];
+        const validOrders = ['asc', 'desc'];
 
-        const totalRecords = Number(count ?? 0);
-const totalPages = totalRecords === 0 ? 0 : Math.ceil(totalRecords / l);
+        if (sort_by && !validSortColumns.includes(sort_by)) {
+            return res.status(400).json({ status: "error", message: `Invalid sort_by. Must be one of: ${validSortColumns.join(', ')}` });
+        }
 
-return res.status(200).json({
-    status: "success",
-    data: data || [],
-    pagination: {
-        page: p,
-        limit: l,
-        total_records: totalRecords,
-        total_pages: totalPages
-    }
+        if (order && !validOrders.includes(order)) {
+            return res.status(400).json({ status: "error", message: "Invalid order. Must be 'asc' or 'desc'" });
+        }
+
+        // Pagination
+        const pageNum = parseInt(page) || 1;
+        const limitNum = Math.min(parseInt(limit) || 10, 10); // max cap at 10
+        const from = (pageNum - 1) * limitNum;
+        const to = from + limitNum - 1;
+
+        const filters = extractFilters(q);
+        let supabaseQuery = supabase.from('profiles').select('*', { count: 'exact' });
+
+        if (filters.gender)     supabaseQuery = supabaseQuery.eq('gender', filters.gender);
+        if (filters.age_group)  supabaseQuery = supabaseQuery.eq('age_group', filters.age_group);
+        if (filters.country_id) supabaseQuery = supabaseQuery.eq('country_id', filters.country_id);
+        if (filters.min_age !== undefined) supabaseQuery = supabaseQuery.gte('age', filters.min_age);
+        if (filters.max_age !== undefined) supabaseQuery = supabaseQuery.lte('age', filters.max_age);
+
+        const hasFilters = Object.keys(filters).length > 0;
+        if (!hasFilters) {
+            supabaseQuery = supabaseQuery.ilike('name', `%${q}%`);
+        }
+
+        // Sorting
+        if (sort_by) {
+            supabaseQuery = supabaseQuery.order(sort_by, { ascending: order !== 'desc' });
+        }
+
+        // Pagination range
+        supabaseQuery = supabaseQuery.range(from, to);
+
+        const { data, count, error } = await supabaseQuery;
+
+        if (error) {
+            console.error("Supabase Error:", error.message);
+            return res.status(400).json({ status: "error", message: error.message });
+        }
+
+        return res.status(200).json({
+            status: "success",
+            total: count,
+            page: pageNum,
+            limit: limitNum,
+            data: data
         });
 
     } catch (err) {
-        return res.status(500).json({ status: "error", message: "Internal server error" });
+        console.error("Search error:", err.message);
+        return res.status(500).json({ status: "error", message: err.message });
     }
 });
 
