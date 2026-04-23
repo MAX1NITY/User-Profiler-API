@@ -29,7 +29,7 @@ app.get('/', (req, res) => {
 });
 
 
-aapp.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
+app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
     try {
         const { q, name, sort_by, order, page, limit } = req.query;
         const queryText = q || name || "";
