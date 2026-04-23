@@ -53,7 +53,7 @@ app.get('/api/profiles/search', async (req, res) => {
             if (extractedFilters.min_age) query = query.gte('age', extractedFilters.min_age);
             if (extractedFilters.max_age) query = query.lte('age', extractedFilters.max_age);
         } else {
-            query = query.or(`bio.ilike.%${queryText}%,name.ilike.%${queryText}%`);
+            query = query.ilike('name', `%${queryText}%`);
         }
 
         const page = parseInt(req.query.page) || 1;
