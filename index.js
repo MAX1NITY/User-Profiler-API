@@ -3,6 +3,12 @@ const app = express();
 const fetch = require('node-fetch');
 const crypto = require('crypto');
 const PORT = process.env.PORT || 8000;
+require('dotenv').config();
+const { createClient } = require('@supabase/supabase-js');
+const { uuidv7 } = require('uuidv7');
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 app.listen(PORT, () => {
     console.log(`Server is running on port http://localhost:${PORT}`);
@@ -114,7 +120,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
         console.log("Nation Data:", JSON.stringify(nationData, null, 2));
 
         const newProfile = {
-                id: crypto.randomUUID(),
+                id: uuidv7(),
                 name : name,
                 gender : genderData?.gender ?? "unknown",
                 gender_probability : genderData?.probability ?? 0,
@@ -126,7 +132,17 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
                 created_at: new Date().toISOString()
         }
 
-        profiles.push(newProfile);
+        const { error } = await supabase
+            .from('profiles')
+            .insert([newProfile]);
+
+            if (error) {
+            if (error.code === '23505') {
+                return res.status(400).json({ status: "error", message: "Name already exists" });
+            }
+            throw error;
+        }
+
         return res.status(201).json({
             status : "success",
             data: newProfile
@@ -171,31 +187,134 @@ app.get(['/api/profiles', '/api/classify'], (req, res) => {
 })
 
 app.get(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
-    const id = req.params.id
-    const profile = profiles.find(p => p.id === id)
+    const { data, error } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", req.params.id)
+        .single();
 
-    if (!profile) {
+    if (error || !data) {
         return res.status(404).json({ 
             status: "error", 
             message: "Profile not found" 
         })
     }
-    res.status(200).json(profile)
+    res.status(200).json({
+        status: "success",
+        data: data
+    })
 })
 
 app.delete(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
-    const id = req.params.id
-    const index = profiles.findIndex(p => p.id === id)
+    
+    const { data: profile } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("id", req.params.id)
+        .single();
 
-    if (index === -1) {
+    if (!profile) {
         return res.status(404).json({
             status: "error",
             message: "Profile not found"
+        });
+    }
+    
+    const { error } = await supabase
+        .from("profiles")
+        .delete()
+        .eq("id", req.params.id);
+
+    if (error) {
+        return res.status(500).json({
+            status: "error",
+            message: "Server failure"
         })
     }
-     profiles.splice(index, 1)
 
-     res.status(204).send()
+     return res.status(204).send()
 })
+
+
+function extractFilters(queryText) {
+    const filters = {};
+    const q = queryText.toLowerCase();
+
+    if (q.includes('male') || q.includes('men')) filters.gender = 'male';
+    if (q.includes('female') || q.includes('women')) filters.gender = 'female';
+
+    if (q.includes('young')) {
+        filters.min_age = 16;
+        filters.max_age = 24;
+    }
+
+    if (q.includes('teenager')) filters.age_group = 'teenager';
+    if (q.includes('adult')) filters.age_group = 'adult';
+    if (q.includes('senior')) filters.age_group = 'senior';
+    if (q.includes('child')) filters.age_group = 'child';
+
+
+    const numbers = q.match(/\d+/);
+    if (numbers) {
+        const val = parseInt(numbers[0]);
+        if (q.includes('above') || q.includes('over') || q.includes('older')) filters.min_age = val;
+        if (q.includes('under') || q.includes('below') || q.includes('younger')) filters.max_age = val;
+    }
+
+    const countries = {
+        'nigeria': 'NG', 'kenya': 'KE', 'angola': 'AO', 
+        'benin': 'BJ', 'ghana': 'GH', 'south africa': 'ZA'
+    };
+    
+    for (const [name, code] of Object.entries(countries)) {
+        if (q.includes(name)) filters.country_id = code;
+    }
+
+    return filters;
+}
+
+app.get('/api/profiles/search', async (req, res) => {
+    try {
+        const queryText = req.query.q;
+
+        if (!queryText) {
+            return res.status(400).json({ status: "error", message: "Invalid query parameters" });
+        }
+
+        const extractedFilters = extractFilters(queryText);
+
+        if (Object.keys(extractedFilters).length === 0) {
+            return res.status(400).json({ status: "error", message: "Unable to interpret query" });
+        }
+
+        let query = supabase.from('profiles').select('*', { count: 'exact' });
+
+        if (extractedFilters.gender) query = query.eq('gender', extractedFilters.gender);
+        if (extractedFilters.age_group) query = query.eq('age_group', extractedFilters.age_group);
+        if (extractedFilters.country_id) query = query.eq('country_id', extractedFilters.country_id);
+        if (extractedFilters.min_age) query = query.gte('age', extractedFilters.min_age);
+        if (extractedFilters.max_age) query = query.lte('age', extractedFilters.max_age);
+
+        const page = parseInt(req.query.page) || 1;
+        const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+        const from = (page - 1) * limit;
+        const to = from + limit - 1;
+
+        const { data, count, error } = await query.range(from, to);
+
+        if (error) throw error;
+
+        res.status(200).json({
+            status: "success",
+            page: page,
+            limit: limit,
+            total: count,
+            data: data
+        });
+
+    } catch (err) {
+        res.status(500).json({ status: "error", message: err.message });
+    }
+});
 
 module.exports = app;
