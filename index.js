@@ -76,6 +76,9 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
 
         if (error) throw error;
 
+        if (!data) data = [];
+        if (!count) count = 0;
+
         if ((!data || data.length === 0) && queryText && !hasFilters) {
             const [genderRes, ageRes, nationRes] = await Promise.all([
     fetch(`https://api.genderize.io?name=${queryText}`),
@@ -104,7 +107,7 @@ const newProfile = {
     gender_probability: genderData?.probability ?? 0,
     age: ageData?.age ?? 0,
     age_group: ageGroupData,
-    country_id: nationData?.country?.[0]?.country_id || "unknown",
+    country_id: nationData?.country?.[0]?.country_id || "??",
     country_probability: nationData?.country?.[0]?.probability || 0,
     created_at: new Date().toISOString()
 };
@@ -122,15 +125,15 @@ count = 1;
         }
 
         return res.status(200).json({
-            status: "success",
-            data: data,
-            pagination: {
-                page: page,
-                limit: limit,
-                total_records: count || 0,
-                total_pages: Math.ceil((count || 0) / limit)
-            }
-        });
+    status: "success",
+    data: data || [],
+    pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total_records: Number(count || 0),
+        total_pages: Math.ceil((Number(count) || 0) / limit) || 0
+    }
+});
 
     } catch (err) {
         console.error(err);
