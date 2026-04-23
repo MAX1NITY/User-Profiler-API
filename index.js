@@ -37,15 +37,18 @@ app.get('/api/profiles/search', async (req, res) => {
         const filters = extractFilters(queryText);
         let supabaseQuery = supabase.from('profiles').select('*', { count: 'exact' });
 
-        const hasFilters = Object.keys(filters).length > 0;
+        // Apply filters ONLY if they exist as columns in your DB
+        if (filters.gender) supabaseQuery = supabaseQuery.eq('gender', filters.gender);
+        if (filters.age_group) supabaseQuery = supabaseQuery.eq('age_group', filters.age_group);
+        if (filters.country_id) supabaseQuery = supabaseQuery.eq('country_id', filters.country_id);
+        
+        // Correctly handle the "min_age" and "max_age" from extractFilters
+        if (filters.min_age) supabaseQuery = supabaseQuery.gte('age', filters.min_age);
+        if (filters.max_age) supabaseQuery = supabaseQuery.lte('age', filters.max_age);
 
-        if (hasFilters) {
-            if (filters.gender) supabaseQuery = supabaseQuery.eq('gender', filters.gender);
-            if (filters.age_group) supabaseQuery = supabaseQuery.eq('age_group', filters.age_group);
-            if (filters.country_id) supabaseQuery = supabaseQuery.eq('country_id', filters.country_id);
-            if (filters.min_age) supabaseQuery = supabaseQuery.gte('age', filters.min_age);
-            if (filters.max_age) supabaseQuery = supabaseQuery.lte('age', filters.max_age);
-        } else {
+        // If NO filters were found, search by name
+        const hasFilters = Object.keys(filters).length > 0;
+        if (!hasFilters) {
             supabaseQuery = supabaseQuery.ilike('name', `%${queryText}%`);
         }
 
