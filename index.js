@@ -156,7 +156,7 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
 
 
 
-app.get(['/api/profiles', '/api/classify'], (req, res) => {
+app.get(['/api/profiles', '/api/classify'], async (req, res) => {
     let {gender, country_id, age_group} = req.query
 
     let filteredProfiles = [...profiles]
@@ -186,7 +186,7 @@ app.get(['/api/profiles', '/api/classify'], (req, res) => {
     })
 })
 
-app.get(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
+app.get(['/api/profiles/:id', '/api/classify/:id'], async (req, res) => {
     const { data, error } = await supabase
         .from("profiles")
         .select("*")
@@ -205,7 +205,7 @@ app.get(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
     })
 })
 
-app.delete(['/api/profiles/:id', '/api/classify/:id'], (req, res) => {
+app.delete(['/api/profiles/:id', '/api/classify/:id'], async (req, res) => {
     
     const { data: profile } = await supabase
         .from("profiles")
