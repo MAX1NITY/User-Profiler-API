@@ -21,6 +21,7 @@ Limitations and Edge Cases
    Conflicting Keywords: If a query contains "young adult," the parser may struggle if "young" and "adult" are defined as separate logic branches. In the current iteration, the last keyword identified usually takes precedence.
    Ambiguous Names: If a name is also a keyword (e.g., a person named "Young"), the parser will prioritize the "young" age filter rather than searching for the name.
    Non-ISO Country Names: The parser requires standard ISO-3166-1 alpha-2 codes. Searching for "Australia" instead of "AU" will fail to trigger the country filter and instead attempt a name search for "Australia."
+
    Multiple Numeric Constraints: The parser is designed to handle one age constraint at a time. A query like "between 20 and 30" is not supported; it will likely only capture the first number detected.
 
 Profile Management

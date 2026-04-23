@@ -29,39 +29,69 @@ app.get('/', (req, res) => {
 });
 
 
-app.get('/api/profiles/search', async (req, res) => {
+app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
     try {
-        const queryText = req.query.q;
-        if (!queryText) return res.status(400).json({ status: "error", message: "Missing query" });
+        const queryText = req.query.q || req.query.name;
+        const sortBy = req.query.sort_by || 'created_at';
+        const order = req.query.order === 'asc' ? true : false;
+        const page = parseInt(req.query.page) || 1;
+        let limit = parseInt(req.query.limit) || 10;
 
-        const filters = extractFilters(queryText);
-        let supabaseQuery = supabase.from('profiles').select('*', { count: 'exact' });
+        const validSortColumns = ['age', 'gender_probability', 'created_at', 'name', 'country_probability'];
+        if (req.query.sort_by && !validSortColumns.includes(req.query.sort_by)) {
+            return res.status(400).json({ 
+                status: "error", 
+                message: "Invalid sort_by column" 
+            });
+        }
+
+        if (limit > 50) limit = 50;
+        if (limit < 1) limit = 10;
+
+        if (!queryText && req.path.includes('search')) {
+            return res.status(400).json({ status: "error", message: "Uninterpretable query" });
+        }
+
+        const filters = extractFilters(queryText || "");
+        const offset = (page - 1) * limit;
+
+        let supabaseQuery = supabase
+            .from('profiles')
+            .select('*', { count: 'exact' })
+            .order(sortBy, { ascending: order })
+            .range(offset, offset + limit - 1);
 
         if (filters.gender) supabaseQuery = supabaseQuery.eq('gender', filters.gender);
         if (filters.age_group) supabaseQuery = supabaseQuery.eq('age_group', filters.age_group);
         if (filters.country_id) supabaseQuery = supabaseQuery.eq('country_id', filters.country_id);
-        
         if (filters.min_age) supabaseQuery = supabaseQuery.gte('age', filters.min_age);
         if (filters.max_age) supabaseQuery = supabaseQuery.lte('age', filters.max_age);
 
         const hasFilters = Object.keys(filters).length > 0;
-        if (!hasFilters) {
+        if (!hasFilters && queryText) {
             supabaseQuery = supabaseQuery.ilike('name', `%${queryText}%`);
         }
 
         const { data, count, error } = await supabaseQuery;
 
-        if (error) {
-            console.error("Supabase Error:", error.message);
-            return res.status(400).json({ status: "error", message: error.message });
+        if (error) throw error;
+
+        if ((!data || data.length === 0) && queryText && !hasFilters) {
         }
 
         return res.status(200).json({
             status: "success",
-            total: count,
-            data: data
+            data: data,
+            pagination: {
+                page: page,
+                limit: limit,
+                total_records: count || 0,
+                total_pages: Math.ceil((count || 0) / limit)
+            }
         });
+
     } catch (err) {
+        console.error(err);
         return res.status(500).json({ status: "error", message: err.message });
     }
 });
