@@ -40,18 +40,21 @@ app.get('/api/profiles/search', async (req, res) => {
         }
 
         const extractedFilters = extractFilters(queryText);
-
-        if (Object.keys(extractedFilters).length === 0) {
-            return res.status(400).json({ status: "error", message: "Unable to interpret query" });
-        }
-
+        
         let query = supabase.from('profiles').select('*', { count: 'exact' });
 
-        if (extractedFilters.gender) query = query.eq('gender', extractedFilters.gender);
-        if (extractedFilters.age_group) query = query.eq('age_group', extractedFilters.age_group);
-        if (extractedFilters.country_id) query = query.eq('country_id', extractedFilters.country_id);
-        if (extractedFilters.min_age) query = query.gte('age', extractedFilters.min_age);
-        if (extractedFilters.max_age) query = query.lte('age', extractedFilters.max_age);
+        const hasFilters = Object.keys(extractedFilters).length > 0
+
+
+        if (hasFilters) {
+            if (extractedFilters.gender) query = query.eq('gender', extractedFilters.gender);
+            if (extractedFilters.age_group) query = query.eq('age_group', extractedFilters.age_group);
+            if (extractedFilters.country_id) query = query.eq('country_id', extractedFilters.country_id);
+            if (extractedFilters.min_age) query = query.gte('age', extractedFilters.min_age);
+            if (extractedFilters.max_age) query = query.lte('age', extractedFilters.max_age);
+        } else {
+            query = query.or(`bio.ilike.%${queryText}%,name.ilike.%${queryText}%`);
+        }
 
         const page = parseInt(req.query.page) || 1;
         const limit = Math.min(parseInt(req.query.limit) || 10, 50);
