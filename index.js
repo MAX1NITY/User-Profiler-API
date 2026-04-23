@@ -34,47 +34,37 @@ app.get('/', (req, res) => {
 app.get('/api/profiles/search', async (req, res) => {
     try {
         const queryText = req.query.q;
+        if (!queryText) return res.status(400).json({ status: "error", message: "Missing query" });
 
-        if (!queryText) {
-            return res.status(400).json({ status: "error", message: "Invalid query parameters" });
-        }
+        const filters = extractFilters(queryText);
+        let supabaseQuery = supabase.from('profiles').select('*', { count: 'exact' });
 
-        const extractedFilters = extractFilters(queryText);
-        
-        let query = supabase.from('profiles').select('*', { count: 'exact' });
-
-        const hasFilters = Object.keys(extractedFilters).length > 0
-
+        const hasFilters = Object.keys(filters).length > 0;
 
         if (hasFilters) {
-            if (extractedFilters.gender) query = query.eq('gender', extractedFilters.gender);
-            if (extractedFilters.age_group) query = query.eq('age_group', extractedFilters.age_group);
-            if (extractedFilters.country_id) query = query.eq('country_id', extractedFilters.country_id);
-            if (extractedFilters.min_age) query = query.gte('age', extractedFilters.min_age);
-            if (extractedFilters.max_age) query = query.lte('age', extractedFilters.max_age);
+            // Apply known working columns only
+            if (filters.gender) supabaseQuery = supabaseQuery.eq('gender', filters.gender);
+            if (filters.age_group) supabaseQuery = supabaseQuery.eq('age_group', filters.age_group);
+            if (filters.country_id) supabaseQuery = supabaseQuery.eq('country_id', filters.country_id);
         } else {
-            query = query.ilike('name', `%${queryText}%`);
+            // This replaces the broken .or() logic
+            // It only searches the 'name' column which we know exists
+            supabaseQuery = supabaseQuery.ilike('name', `%${queryText}%`);
         }
 
-        const page = parseInt(req.query.page) || 1;
-        const limit = Math.min(parseInt(req.query.limit) || 10, 50);
-        const from = (page - 1) * limit;
-        const to = from + limit - 1;
+        const { data, count, error } = await supabaseQuery;
 
-        const { data, count, error } = await query.range(from, to);
+        if (error) {
+            console.error("Supabase Error:", error.message);
+            return res.status(400).json({ status: "error", message: error.message });
+        }
 
-        if (error) throw error;
-
-        res.status(200).json({
+        return res.status(200).json({
             status: "success",
-            page: page,
-            limit: limit,
             total: count,
             data: data
         });
-
     } catch (err) {
-        console.error("Search Logic Error:", err.message);
         return res.status(500).json({ status: "error", message: err.message });
     }
 });
