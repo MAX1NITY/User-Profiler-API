@@ -33,7 +33,7 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
     try {
         const queryText = req.query.q || req.query.name;
         const sortBy = req.query.sort_by || 'created_at';
-        const order = req.query.order === 'asc' ? true : false;
+        const order = req.query.order === 'desc' ? false : true;
         const page = parseInt(req.query.page) || 1;
         let limit = parseInt(req.query.limit) || 10;
 
@@ -41,7 +41,7 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         if (req.query.sort_by && !validSortColumns.includes(req.query.sort_by)) {
             return res.status(400).json({ 
                 status: "error", 
-                message: "Invalid sort_by column" 
+                message: "Missing or empty parameter" 
             });
         }
 
@@ -49,7 +49,7 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         if (limit < 1) limit = 10;
 
         if (!queryText && req.path.includes('search')) {
-            return res.status(400).json({ status: "error", message: "Uninterpretable query" });
+            return res.status(400).json({ status: "error", message: "Missing or empty parameter" });
         }
 
         const filters = extractFilters(queryText || "");
@@ -72,11 +72,53 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
             supabaseQuery = supabaseQuery.ilike('name', `%${queryText}%`);
         }
 
-        const { data, count, error } = await supabaseQuery;
+        let { data, count, error } = await supabaseQuery;
 
         if (error) throw error;
 
         if ((!data || data.length === 0) && queryText && !hasFilters) {
+            const [genderRes, ageRes, nationRes] = await Promise.all([
+    fetch(`https://api.genderize.io?name=${queryText}`),
+    fetch(`https://api.agify.io?name=${queryText}`),
+    fetch(`https://api.nationalize.io?name=${queryText}`)
+]);
+
+const [genderData, ageData, nationData] = await Promise.all([
+    genderRes.json(), 
+    ageRes.json(), 
+    nationRes.json()
+]);
+
+let ageGroupData = "unknown";
+if (ageData.age !== null && ageData.age !== undefined) {
+    if (ageData.age <= 12) ageGroupData = "child";
+    else if (ageData.age <= 19) ageGroupData = "teenager";
+    else if (ageData.age <= 59) ageGroupData = "adult";
+    else ageGroupData = "senior";
+}
+
+const newProfile = {
+    id: uuidv7(), 
+    name: queryText,
+    gender: genderData?.gender ?? "unknown",
+    gender_probability: genderData?.probability ?? 0,
+    age: ageData?.age ?? 0,
+    age_group: ageGroupData,
+    country_id: nationData?.country?.[0]?.country_id || "unknown",
+    country_probability: nationData?.country?.[0]?.probability || 0,
+    created_at: new Date().toISOString()
+};
+
+const { error: insertError } = await supabase
+    .from('profiles')
+    .insert([newProfile]);
+
+if (insertError) {
+    if (insertError.code !== '23505') throw insertError;
+}
+
+data = [newProfile];
+count = 1;
         }
 
         return res.status(200).json({
@@ -92,7 +134,7 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
 
     } catch (err) {
         console.error(err);
-        return res.status(500).json({ status: "error", message: err.message });
+        return res.status(500).json({ status: "error", message: "Server failure" });
     }
 });
 
@@ -102,13 +144,13 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
         const name = req.body.name
 
         if (!req.body || !isNaN(name)) {
-            return res.status(400).json({ status: "error", message: "Missing or empty name" });
+            return res.status(400).json({ status: "error", message: "Missing or empty parameter" });
         }
 
         if (!name || name.trim() === "" || name === 'undefined') {
         return res.status(422).json({
         status: "error",
-        message: "Invalid type"
+        message: "Invalid parameter type"
             });
         }
 
@@ -134,14 +176,11 @@ if (existingProfile) {
             })
         }
 
-        console.log("Starting fetches...")
         const [genderRes, ageRes, nationRes] = await Promise.all([
             fetch(`https://api.genderize.io?name=${name}`),
             fetch(`https://api.agify.io?name=${name}`),
             fetch(`https://api.nationalize.io?name=${name}`)
         ])
-
-        console.log("Fetches finished. Starting JSON parsing...")
 
         const [genderData, ageData, nationData]  = await Promise.all([genderRes.json(), ageRes.json(), nationRes.json()])
         console.log("JSON parsing finished")
@@ -152,7 +191,7 @@ if (existingProfile) {
             externalApi = "Genderize"
             return res.status(502).json({
                 "status": "error", 
-                "message": `${externalApi} returned an invalid response`
+                "message": "Server failure"
             });
         }
 
@@ -160,7 +199,7 @@ if (existingProfile) {
             externalApi = "Agify"
             return res.status(502).json({
                 "status": "error", 
-                "message": `${externalApi} returned an invalid response`
+                "message": "Server failure"
             });
         }
 
@@ -168,7 +207,7 @@ if (existingProfile) {
             externalApi = "Nationalize"
             return res.status(502).json({
                 "status": "error", 
-                "message": `${externalApi} returned an invalid response`
+                "message": "Server failure"
             });
         }
 
@@ -190,7 +229,7 @@ if (existingProfile) {
             externalApi = "Upstream API"
             return res.status(502).json({
                 status: "error",
-                message: `${externalApi} returned an invalid response`
+                message: "Server failure"
             });
         }
 
@@ -215,7 +254,7 @@ if (existingProfile) {
 
             if (error) {
             if (error.code === '23505') {
-                return res.status(400).json({ status: "error", message: "Name already exists" });
+                return res.status(400).json({ status: "error", message: "Missing or empty parameter" });
             }
             throw error;
         }
@@ -227,7 +266,7 @@ if (existingProfile) {
 
     } catch (error) {
         console.error(error)
-        return res.status(500).json({status: "error", message: "Upstream or server failure"})
+        return res.status(500).json({status: "error", message: "Server failure"})
     }
 });
 
@@ -247,7 +286,7 @@ app.get(['/api/profiles', '/api/classify'], async (req, res) => {
 
         if (error) {
             console.error("Supabase Fetch Error:", error.message);
-            return res.status(400).json({ status: "error", message: error.message });
+            return res.status(400).json({ status: "error", message: "Missing or empty parameter" });
         }
 
         return res.status(200).json({
@@ -258,7 +297,7 @@ app.get(['/api/profiles', '/api/classify'], async (req, res) => {
 
     } catch (err) {
         console.error("General GET Error:", err.message);
-        return res.status(500).json({ status: "error", message: "Internal server error" });
+        return res.status(500).json({ status: "error", message: "Server failure" });
     }
 });
 
