@@ -14,8 +14,6 @@ app.listen(PORT, () => {
     console.log(`Server is running on port http://localhost:${PORT}`);
 });
 
-let profiles = [];
-
 app.use(express.json());
 
 app.use((req, res, next) => {
@@ -42,13 +40,12 @@ app.get('/api/profiles/search', async (req, res) => {
         const hasFilters = Object.keys(filters).length > 0;
 
         if (hasFilters) {
-            // Apply known working columns only
             if (filters.gender) supabaseQuery = supabaseQuery.eq('gender', filters.gender);
             if (filters.age_group) supabaseQuery = supabaseQuery.eq('age_group', filters.age_group);
             if (filters.country_id) supabaseQuery = supabaseQuery.eq('country_id', filters.country_id);
+            if (filters.min_age) supabaseQuery = supabaseQuery.gte('age', filters.min_age);
+            if (filters.max_age) supabaseQuery = supabaseQuery.lte('age', filters.max_age);
         } else {
-            // This replaces the broken .or() logic
-            // It only searches the 'name' column which we know exists
             supabaseQuery = supabaseQuery.ilike('name', `%${queryText}%`);
         }
 
@@ -85,7 +82,19 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
             });
         }
 
-        const existingProfile = profiles.find(p => p.name.toLowerCase() === name.toLowerCase())
+        const { data: existingProfile } = await supabase
+    .from('profiles')
+    .select('name')
+    .ilike('name', name)
+    .single();
+
+if (existingProfile) {
+    return res.status(200).json({
+        status: "success",
+        message: "profile already exists",
+        data: existingProfile
+    });
+}
 
         if (existingProfile) {
             return res.status(200).json({
@@ -163,7 +172,6 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
                 name : name,
                 gender : genderData?.gender ?? "unknown",
                 gender_probability : genderData?.probability ?? 0,
-                sample_size : genderData?.count ?? 0,
                 age : ageData?.age ?? 0,
                 age_group: ageGroupData ?? "unknown",
                 country_id: nationData?.country?.[0]?.country_id || "unknown",
@@ -196,34 +204,37 @@ app.post(['/api/profiles', '/api/classify'], async (req, res) => {
 
 
 app.get(['/api/profiles', '/api/classify'], async (req, res) => {
-    let {gender, country_id, age_group} = req.query
+    try {
+        let { gender, country_id, age_group } = req.query;
 
-    let filteredProfiles = [...profiles]
+        // Start building the Supabase query
+        let query = supabase.from('profiles').select('*', { count: 'exact' });
 
-    if (gender) {
-        filteredProfiles = filteredProfiles.filter(p => 
-            p.gender.toLowerCase() === gender.toLowerCase()
-        )
+        // Apply database filters if they exist in the URL (e.g., ?gender=male)
+        if (gender) query = query.ilike('gender', gender);
+        if (country_id) query = query.ilike('country_id', country_id);
+        if (age_group) query = query.ilike('age_group', age_group);
+
+        // Execute the query
+        const { data, count, error } = await query;
+
+        if (error) {
+            console.error("Supabase Fetch Error:", error.message);
+            return res.status(400).json({ status: "error", message: error.message });
+        }
+
+        // Return the actual database results
+        return res.status(200).json({
+            status: "success",
+            count: count || 0,
+            data: data || []
+        });
+
+    } catch (err) {
+        console.error("General GET Error:", err.message);
+        return res.status(500).json({ status: "error", message: "Internal server error" });
     }
-
-    if (country_id) {
-        filteredProfiles = filteredProfiles.filter(p => 
-            p.country_id.toLowerCase() === country_id.toLowerCase()
-        )
-    }
-
-    if (age_group) {
-        filteredProfiles = filteredProfiles.filter(p => 
-            p.age_group.toLowerCase() === age_group.toLowerCase()
-        )
-    }
-
-    res.status(200).json({
-        status: "success",
-        count: filteredProfiles.length,
-        data: filteredProfiles
-    })
-})
+});
 
 app.get(['/api/profiles/:id', '/api/classify/:id'], async (req, res) => {
     const { data, error } = await supabase
