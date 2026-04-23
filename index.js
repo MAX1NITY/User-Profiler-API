@@ -74,7 +74,8 @@ app.get('/api/profiles/search', async (req, res) => {
         });
 
     } catch (err) {
-        res.status(500).json({ status: "error", message: err.message });
+        console.error("Search Logic Error:", err.message);
+        return res.status(500).json({ status: "error", message: err.message });
     }
 });
 
