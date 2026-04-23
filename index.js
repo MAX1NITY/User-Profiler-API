@@ -70,7 +70,6 @@ else {
         message: "invalid order"
     });
 }
-        const offset = (p - 1) * l;
         const filters = extractFilters(queryText);
 
         // 3. DATABASE CALL
