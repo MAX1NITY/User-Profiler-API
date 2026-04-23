@@ -35,25 +35,41 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         const queryText = q || name || "";
         
         // 1. STRICT VALIDATION
-        if (!queryText || !queryText.trim()) {
-            return res.status(400).json({ status: "error", message: "uninterpretable q" });
-        }
+        if (!q && !name) {
+    return res.status(400).json({
+        status: "error",
+        message: "uninterpretable q"
+    });
+}
 
         const validSorts = ['age', 'gender_probability', 'created_at', 'name'];
         const sortBy = validSorts.includes(sort_by) ? sort_by : 'created_at';
         
         if (sort_by && !validSorts.includes(sort_by)) {
-            return res.status(400).json({ status: "error", message: "invalid sort_by" });
-        }
+    return res.status(400).json({
+        status: "error",
+        message: "invalid sort_by"
+    });
+}
 
-        // 2. PAGINATION & SORTING
-        const p = Math.max(1, parseInt(page) || 1);
-        let l = parseInt(limit) || 10;
-        if (l > 50) l = 50; 
-        if (l < 1) l = 1;
+        const p = Number(page) >= 1 ? Number(page) : 1;
 
-        // FIX: Explicitly check for 'asc', otherwise default to false (desc)
-        const ascending = order === 'asc' ? true : false; 
+let l = Number(limit) || 10;
+if (l > 50) l = 50;   // cap
+if (l < 1) l = 1;
+
+const offset = (p - 1) * l;
+
+        let ascending;
+
+if (order === 'asc') ascending = true;
+else if (order === 'desc' || !order) ascending = false;
+else {
+    return res.status(400).json({
+        status: "error",
+        message: "invalid order"
+    });
+}
         const offset = (p - 1) * l;
         const filters = extractFilters(queryText);
 
@@ -67,6 +83,7 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         // Apply filters...
         if (filters.gender) query = query.eq('gender', filters.gender);
         if (filters.country_id) query = query.eq('country_id', filters.country_id.toUpperCase());
+        if (filters.age_group) query = query.eq('age_group', filters.age_group);
         if (filters.min_age) query = query.gte('age', filters.min_age);
         if (filters.max_age) query = query.lte('age', filters.max_age);
 
@@ -77,21 +94,18 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         let { data, count, error } = await query;
         if (error) throw error;
 
-        // ... [Fallback logic remains the same] ...
+        const totalRecords = Number(count ?? 0);
+const totalPages = totalRecords === 0 ? 0 : Math.ceil(totalRecords / l);
 
-        // 4. THE PERFECT ENVELOPE (Strict Numbers)
-        const totalRecords = Number(count || 0);
-        const totalPages = totalRecords === 0 ? 0 : Math.ceil(totalRecords / l);
-
-        return res.status(200).json({
-            status: "success",
-            data: data || [],
-            pagination: {
-                page: Number(p),
-                limit: Number(l),
-                total_records: totalRecords,
-                total_pages: Number(totalPages) // Crucial: Must be a number
-            }
+return res.status(200).json({
+    status: "success",
+    data: data || [],
+    pagination: {
+        page: p,
+        limit: l,
+        total_records: totalRecords,
+        total_pages: totalPages
+    }
         });
 
     } catch (err) {
@@ -128,14 +142,6 @@ if (existingProfile) {
         data: existingProfile
     });
 }
-
-        if (existingProfile) {
-            return res.status(200).json({
-                status: "success",
-                message: "profile already exists",
-                data: existingProfile
-            })
-        }
 
         const [genderRes, ageRes, nationRes] = await Promise.all([
             fetch(`https://api.genderize.io?name=${name}`),
