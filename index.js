@@ -34,7 +34,6 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         const { q, name, gender, country_id, sort_by, order, page, limit } = req.query;
         const queryText = (q || name || "").trim();
 
-        // 1. STRICT VALIDATION (Fixes 0/5 pts)
         if (!queryText && !gender && !country_id) {
             return res.status(400).json({ status: "error", message: "uninterpretable q" });
         }
@@ -44,14 +43,13 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
             return res.status(400).json({ status: "error", message: "invalid sort_by" });
         }
 
-        // 2. PAGINATION & SORTING (Fixes 0/15 and 2/10 pts)
         const pageNum = Math.max(1, parseInt(page) || 1);
         let limitNum = parseInt(limit) || 10;
         if (limitNum > 50) limitNum = 50; 
         if (limitNum < 1) limitNum = 1;
 
         const sortBy = sort_by || 'created_at';
-        const isAscending = order === 'asc'; // Defaults to desc if missing or 'desc'
+        const isAscending = order === 'asc';
         const from = (pageNum - 1) * limitNum;
         const to = from + limitNum - 1;
 
@@ -63,13 +61,11 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
             .order(sortBy, { ascending: isAscending })
             .range(from, to);
 
-        // Apply dynamic filters
         if (filters.gender) query = query.eq('gender', filters.gender);
         if (filters.country_id) query = query.eq('country_id', filters.country_id.toUpperCase());
         if (filters.min_age) query = query.gte('age', filters.min_age);
         if (filters.max_age) query = query.lte('age', filters.max_age);
 
-        // Name search only if no structured filters are found
         if (!Object.keys(filters).length) {
             query = query.ilike('name', `%${queryText}%`);
         }
@@ -77,7 +73,6 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         let { data, count, error } = await query;
         if (error) throw error;
 
-        // 4. FALLBACK LOGIC (Fetch if DB is empty and it's a plain name)
         if ((!data || data.length === 0) && !Object.keys(filters).length) {
             try {
                 const [gRes, aRes, nRes] = await Promise.all([
@@ -109,7 +104,6 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
             }
         }
 
-        // 5. THE PERFECT RESPONSE ENVELOPE
         const totalRecords = Number(count || 0);
         return res.status(200).json({
             status: "success",
