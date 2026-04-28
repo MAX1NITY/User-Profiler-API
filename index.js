@@ -35,12 +35,12 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         const queryText = (q || name || "").trim();
 
         if (!queryText && !gender && !country_id) {
-            return res.status(400).json({ status: "error", message: "uninterpretable q" });
+            return res.status(400).json({ status: "error", message: "Unable to interpret query" });
         }
 
         const validSorts = ['age', 'gender_probability', 'created_at', 'name'];
         if (sort_by && !validSorts.includes(sort_by)) {
-            return res.status(400).json({ status: "error", message: "invalid sort_by" });
+            return res.status(400).json({ status: "error", message: "Invalid query parameters" });
         }
 
         const pageNum = Math.max(1, parseInt(page) || 1);
@@ -53,7 +53,6 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         const from = (pageNum - 1) * limitNum;
         const to = from + limitNum - 1;
 
-        // 3. EXTRACT FILTERS & BUILD QUERY
         const filters = extractFilters(queryText);
         let query = supabase
             .from('profiles')
@@ -82,6 +81,16 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
                 ]);
                 const [g, a, n] = await Promise.all([gRes.json(), aRes.json(), nRes.json()]);
 
+                const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+                const isoCode = (n.country?.[0]?.country_id || "XX").toUpperCase();
+                let fullName = "Unknown";
+
+                try {
+                    if (isoCode !== "XX") fullName = regionNames.of(isoCode);
+                } catch (e) {
+                    fullName = "Unknown";
+                }
+
                 const newProfile = {
                     id: uuidv7(),
                     name: queryText,
@@ -89,8 +98,8 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
                     gender_probability: parseFloat(g.probability || 0),
                     age: parseInt(a.age || 0),
                     age_group: a.age < 13 ? "child" : a.age < 20 ? "teenager" : a.age < 60 ? "adult" : "senior",
-                    country_id: (n.country?.[0]?.country_id || "unknown").substring(0, 2),
-                    country_probability: parseFloat(n.country?.[0]?.probability || 0),
+                    country_id: isoCode,
+                    country_probability: fullName,
                     created_at: new Date().toISOString()
                 };
 
@@ -107,18 +116,15 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         const totalRecords = Number(count || 0);
         return res.status(200).json({
             status: "success",
-            data: data || [],
-            pagination: {
-                page: Number(pageNum),
-                limit: Number(limitNum),
-                total_records: totalRecords,
-                total_pages: totalRecords === 0 ? 0 : Math.ceil(totalRecords / limitNum)
-            }
+            page: Number(pageNum),
+            limit: Number(limitNum),
+            total: totalRecords,
+            data: data || []
         });
 
     } catch (err) {
         console.error(err);
-        return res.status(500).json({ status: "error", message: "Internal server error" });
+        return res.status(500).json({ status: "error", message: "Server failure" });
     }
 });
 
