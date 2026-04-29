@@ -1,4 +1,9 @@
 const express = require('express');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
+const logger = require('./middleware/logger');
+const { authLimiter, generalLimiter } = require('./middleware/rateLimiter');
+const versionCheck = require('./middleware/versionCheck');
 const app = express();
 const fetch = require('node-fetch');
 const crypto = require('crypto');
@@ -9,12 +14,224 @@ const { uuidv7 } = require('uuidv7');
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
+const jwt = require('jsonwebtoken');
+const { Parser } = require('json2csv');
 
-app.listen(PORT, () => {
-    console.log(`Server is running on port http://localhost:${PORT}`);
-});
+
 
 app.use(express.json());
+app.use(logger);
+app.use(cookieParser());
+
+app.use(cors({
+    origin: 'http://localhost:5173', 
+    credentials: true 
+}));
+
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1] || req.cookies.access_token;
+
+    if (!token) {
+        return res.status(401).json({ status: "error", message: "Authentication token required" });
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ status: "error", message: "Invalid or expired token" });
+        }
+        
+        req.user = user;
+        next();
+    });
+};
+
+app.get('/auth/github', (req, res) => {
+    const rootUrl = 'https://github.com/login/oauth/authorize';
+    const options = {
+        client_id: process.env.GITHUB_CLIENT_ID,
+        redirect_uri: 'http://localhost:8000/auth/github/callback',
+        scope: 'user:email',
+    };
+    const queryString = new URLSearchParams(options).toString();
+    res.redirect(`${rootUrl}?${queryString}`);
+});
+
+app.post('/auth/github/callback', async (req, res) => {
+    const { code, code_verifier } = req.body;
+
+    if (!code || !code_verifier) {
+        return res.status(400).json({ status: 'error', message: 'Code and Verifier required' });
+    }
+
+    try {
+        // 1. Exchange the 'code' for a GitHub Access Token
+        // This proves to GitHub that the user actually logged in
+        const githubResponse = await axios.post('https://github.com/login/oauth/access_token', {
+            client_id: process.env.GITHUB_CLIENT_ID,
+            client_secret: process.env.GITHUB_CLIENT_SECRET,
+            code: code,
+        }, {
+            headers: { Accept: 'application/json' }
+        });
+
+        const githubToken = githubResponse.data.access_token;
+
+        // 2. Get User Info from GitHub
+        const userResponse = await axios.get('https://api.github.com/user', {
+            headers: { Authorization: `token ${githubToken}` }
+        });
+
+        const { id, login, email, avatar_url } = userResponse.data;
+
+        // 3. Upsert User in Supabase (Create or Update)
+        const { data: user, error } = await supabase
+            .from('users')
+            .upsert({ 
+                github_id: id.toString(), 
+                username: login, 
+                email, 
+                avatar_url,
+                last_login_at: new Date() 
+            }, { onConflict: 'github_id' })
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        // 4. Generate YOUR System's Tokens (JWT)
+        const access_token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '3m' });
+        const refresh_token = jwt.sign({ id: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: '5m' });
+
+        // 5. Send tokens back to the CLI
+        res.json({
+            status: 'success',
+            access_token,
+            refresh_token
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ status: 'error', message: 'Authentication failed' });
+    }
+});
+
+app.get('/auth/github/callback', async (req, res) => {
+    const { code, code_verifier } = req.query;
+    console.log("Callback received with code:", code);
+
+    if (!code) {
+        return res.status(400).json({ status: "error", message: "No code from GitHub" });
+    }
+
+    try {
+        const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+            client_id: process.env.GITHUB_CLIENT_ID,
+            client_secret: process.env.GITHUB_CLIENT_SECRET,
+            code,
+            code_verifier
+        })
+    });
+        const tokenData = await tokenResponse.json();
+
+        const userRes = await fetch('https://api.github.com/user', {
+            headers: { Authorization: `Bearer ${tokenData.access_token}` }
+        });
+        const githubUser = await userRes.json();
+
+        const { data: user, error } = await supabase
+            .from('users')
+            .upsert({
+                github_id: githubUser.id.toString(),
+                username: githubUser.login,
+                avatar_url: githubUser.avatar_url,
+                last_login_at: new Date().toISOString()
+            }, { onConflict: 'github_id' })
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        const accessToken = jwt.sign(
+            { id: user.id, role: user.role },
+            process.env.JWT_SECRET,
+            { expiresIn: '3m' }
+        );
+
+        const refreshToken = jwt.sign(
+            { id: user.id },
+            process.env.JWT_REFRESH_SECRET, // You'll need a second secret in .env
+            { expiresIn: '5m' }
+        );
+
+        const cliRedirect = `http://localhost:3000?access_token=${accessToken}&refresh_token=${refreshToken}`;
+        console.log('Redirecting to CLI:', cliRedirect);
+        res.redirect(cliRedirect);
+
+        res.cookie('access_token', access_token, {
+        httpOnly: true,
+        secure: true, // Set to true in production/HTTPS
+        sameSite: 'none',
+        maxAge: 3 * 60 * 1000 // 3 minutes
+    });
+
+    return res.redirect('http://localhost:5173/dashboard');
+
+    } catch (err) {
+        console.error("Auth Error:", err);
+        res.status(500).json({ status: "error", message: "Authentication failed" });
+    }
+});
+
+app.post('/auth/refresh', async (req, res) => {
+    const { refresh_token } = req.body;
+
+    if (!refresh_token) {
+        return res.status(400).json({ status: "error", message: "Refresh token required" });
+    }
+
+    try {
+        // 1. Verify the refresh token
+        const decoded = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
+        
+        // 2. Get user from DB to make sure they are still active
+        const { data: user } = await supabase.from('users').select('*').eq('id', decoded.id).single();
+        
+        if (!user || !user.is_active) {
+            return res.status(403).json({ status: "error", message: "User inactive or not found" });
+        }
+
+        // 3. Issue NEW pair (Token Rotation)
+        const newAccessToken = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '3m' });
+        const newRefreshToken = jwt.sign({ id: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: '5m' });
+
+        res.status(200).json({
+            status: "success",
+            access_token: newAccessToken,
+            refresh_token: newRefreshToken
+        });
+    } catch (err) {
+        res.status(403).json({ status: "error", message: "Invalid refresh token" });
+    }
+});
+
+app.post('/auth/logout', (req, res) => {
+    res.status(200).json({ 
+        status: "success", 
+        message: "Logged out successfully. Please delete your local tokens." 
+    });
+});
+
+app.use('/auth', authLimiter);
+
+app.use('/api', generalLimiter, versionCheck);
+
+// app.use('/auth', authRoutes);
+
+
 
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -29,7 +246,93 @@ app.get('/', (req, res) => {
 });
 
 
-app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
+app.get('/api/me', authenticateToken, async (req, res) => {
+    try {
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('id, username, role, avatar_url, is_active')
+            .eq('id', req.user.id)
+            .single();
+
+        if (error || !user) {
+            return res.status(404).json({ status: "error", message: "User not found" });
+        }
+
+        if (!user.is_active) {
+            return res.status(403).json({ status: "error", message: "Account is deactivated" });
+        }
+
+        res.status(200).json({
+            status: "success",
+            data: user
+        });
+    } catch (err) {
+        res.status(500).json({ status: "error", message: "Server failure" });
+    }
+});
+
+app.get('/api/labs', authenticateToken, async (req, res) => {
+    try {
+        const { data: labs, error } = await supabase
+            .from('labs') // Ensure your table is named 'labs'
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        res.status(200).json({
+            status: "success",
+            data: labs
+        });
+    } catch (err) {
+        res.status(500).json({ status: "error", message: err.message });
+    }
+});
+
+app.post('/api/labs', authenticateToken, async (req, res) => {
+  const { name, description } = req.body;
+
+  try {
+    const { data, error } = await supabase
+      .from('labs')
+      .insert([{ 
+        name, 
+        description, 
+        user_id: req.user.id // This comes from your JWT token!
+      }])
+      .select();
+
+    if (error) throw error;
+    res.status(201).json({ status: 'success', data: data[0] });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+app.delete('/api/labs/:id', authenticateToken, /* adminCheck, */ async (req, res) => {
+    
+    // Step 2: Grab the ID from the URL
+    const { id } = req.params;
+
+    // Step 3: The actual Database Logic
+    try {
+        const { error } = await supabase
+          .from('labs')
+          .delete()
+          .eq('id', id);
+
+        if (error) throw error;
+
+        // Step 4: The Success Response
+        res.json({ status: 'success', message: `Lab ${id} deleted successfully.` });
+        
+    } catch (err) {
+        // Step 5: The Error Response
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.get(['/api/profiles/search', '/api/classify'], authenticateToken, async (req, res) => {
     try {
         const { q, name, gender, country_id, sort_by, order, page, limit } = req.query;
         const queryText = (q || name || "").trim();
@@ -99,7 +402,8 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
                     age: parseInt(a.age || 0),
                     age_group: a.age < 13 ? "child" : a.age < 20 ? "teenager" : a.age < 60 ? "adult" : "senior",
                     country_id: isoCode,
-                    country_probability: fullName,
+                    country_name: fullName,
+                    country_probability: parseFloat(n.country?.[0]?.probability || 0),
                     created_at: new Date().toISOString()
                 };
 
@@ -114,11 +418,23 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
         }
 
         const totalRecords = Number(count || 0);
+        const totalPages = Math.ceil(totalRecords / limitNum);
+
+        const protocol = req.protocol;
+        const host = req.get('host');
+        const fullPath = `${protocol}://${host}/api/profiles/search`;
+
         return res.status(200).json({
             status: "success",
             page: Number(pageNum),
             limit: Number(limitNum),
             total: totalRecords,
+            total_pages: totalPages,
+            links: {
+                self: `${fullPath}?page=${pageNum}&limit=${limitNum}${q ? `&q=${q}` : ''}`,
+                next: pageNum < totalPages ? `${fullPath}?page=${pageNum + 1}&limit=${limitNum}${q ? `&q=${q}` : ''}` : null,
+                prev: pageNum > 1 ? `${fullPath}?page=${pageNum - 1}&limit=${limitNum}${q ? `&q=${q}` : ''}` : null
+            },
             data: data || []
         });
 
@@ -128,9 +444,41 @@ app.get(['/api/profiles/search', '/api/classify'], async (req, res) => {
     }
 });
 
+app.get('/api/profiles/export', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ 
+            status: "error", 
+            message: "Forbidden: Admin access required" 
+        });
+    }
 
-app.post(['/api/profiles', '/api/classify'], async (req, res) => {
+    try {
+        const { data: profiles, error } = await supabase.from('profiles').select('*');
+        if (error) throw error;
+
+        const json2csvParser = new Parser();
+        const csv = json2csvParser.parse(profiles);
+
+        res.header('Content-Type', 'text/csv');
+        res.attachment('profiles_export.csv');
+        return res.send(csv);
+
+    } catch (err) {
+        res.status(500).json({ status: "error", message: "Export failed" });
+    }
+});
+
+
+app.post(['/api/profiles', '/api/classify'], authenticateToken, async (req, res) => {
     try{
+
+        if (req.user.role !== 'admin') {
+        return res.status(403).json({ 
+            status: "error", 
+            message: "Forbidden: Admin access required" 
+        });
+    }
+
         const name = req.body.name
 
         if (!req.body || !isNaN(name)) {
@@ -254,9 +602,17 @@ if (existingProfile) {
 
 
 
-app.get(['/api/profiles', '/api/classify'], async (req, res) => {
+app.get(['/api/profiles', '/api/classify'], authenticateToken, async (req, res) => {
     try {
-        let { gender, country_id, age_group } = req.query;
+        let { gender, country_id, age_group, page, limit } = req.query;
+
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        let limitNum = parseInt(limit) || 10;
+        if (limitNum > 50) limitNum = 50;
+        if (limitNum < 1) limitNum = 1;
+        
+        const from = (pageNum - 1) * limitNum;
+        const to = from + limitNum - 1;
 
         let query = supabase.from('profiles').select('*', { count: 'exact' });
 
@@ -264,16 +620,33 @@ app.get(['/api/profiles', '/api/classify'], async (req, res) => {
         if (country_id) query = query.ilike('country_id', country_id);
         if (age_group) query = query.ilike('age_group', age_group);
 
-        const { data, count, error } = await query;
+        const { data, count, error } = await query
+            .range(from, to)
+            .order('created_at', { ascending: false });
 
         if (error) {
             console.error("Supabase Fetch Error:", error.message);
             return res.status(400).json({ status: "error", message: "Missing or empty parameter" });
         }
 
+        const totalRecords = Number(count || 0);
+        const totalPages = Math.ceil(totalRecords / limitNum);
+        
+        const protocol = req.protocol;
+        const host = req.get('host');
+        const baseUrl = `${protocol}://${host}/api/profiles`;
+
         return res.status(200).json({
             status: "success",
-            count: count || 0,
+            page: Number(pageNum),
+            limit: Number(limitNum),
+            total: totalRecords,
+            total_pages: totalPages,
+            links: {
+                self: `${baseUrl}?page=${pageNum}&limit=${limitNum}`,
+                next: pageNum < totalPages ? `${baseUrl}?page=${pageNum + 1}&limit=${limitNum}` : null,
+                prev: pageNum > 1 ? `${baseUrl}?page=${pageNum - 1}&limit=${limitNum}` : null
+            },
             data: data || []
         });
 
@@ -283,7 +656,7 @@ app.get(['/api/profiles', '/api/classify'], async (req, res) => {
     }
 });
 
-app.get(['/api/profiles/:id', '/api/classify/:id'], async (req, res) => {
+app.get(['/api/profiles/:id', '/api/classify/:id'], authenticateToken, async (req, res) => {
     const { data, error } = await supabase
         .from("profiles")
         .select("*")
@@ -302,7 +675,15 @@ app.get(['/api/profiles/:id', '/api/classify/:id'], async (req, res) => {
     })
 })
 
-app.delete(['/api/profiles/:id', '/api/classify/:id'], async (req, res) => {
+app.delete(['/api/profiles/:id', '/api/classify/:id'], authenticateToken, async (req, res) => {
+    const { id } = req.params;
+
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ 
+            status: "error", 
+            message: "Forbidden: Admin access required" 
+        });
+    }
     
     const { data: profile } = await supabase
         .from("profiles")
@@ -330,6 +711,8 @@ app.delete(['/api/profiles/:id', '/api/classify/:id'], async (req, res) => {
     }
 
      return res.status(204).send()
+
+     
 })
 
 
@@ -369,5 +752,9 @@ function extractFilters(queryText) {
 
     return filters;
 }
+
+app.listen(PORT, () => {
+    console.log(`Server is running on port http://localhost:${PORT}`);
+});
 
 module.exports = app;
