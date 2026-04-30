@@ -60,12 +60,13 @@ app.use('/auth', authLimiter);
 app.use('/api', generalLimiter, versionCheck);
 
 app.get('/auth/github', async (req, res) => {
-    const { state, code_challenge, code_challenge_method } = req.query;
+    const state = req.query.state || crypto.randomBytes(16).toString('hex');
+    const code_verifier = req.query.code_verifier;
 
-    if (state && code_challenge) {
+    if (state && code_verifier) {
             await supabase.from('auth_state').insert({
-                state,
-                code_challenge,
+                state: state,
+                code_verifier: code_verifier,
                 expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
             });
         }
@@ -141,34 +142,24 @@ app.post('/auth/github/callback', async (req, res) => {
 });
 
 app.get('/auth/github/callback', async (req, res) => {
-    const { code, state, code_verifier } = req.query;
+    const { code, state } = req.query;
     console.log("Callback received with code:", code);
 
     if (!state) {
         return res.status(400).json({ status: "error", message: "Missing state parameter" });
     }
 
-    const { data: pending } = await supabase
+    const { data: pending, error: dbError } = await supabase
         .from('auth_state')
         .select('*')
         .eq('state', state)
         .single();
 
-    if (!pending || new Date(pending.expires_at) < new Date()) {
+    if (dbError || !pending || new Date(pending.expires_at) < new Date()) {
         return res.status(400).json({ status: "error", message: "Invalid or expired state" });
     }
 
-    if (code_verifier) {
-        const expectedChallenge = crypto
-            .createHash('sha256')
-            .update(code_verifier)
-            .digest('base64url');
-
-        if (expectedChallenge !== pending.code_challenge) {
-            pendingAuth.delete(state);
-            return res.status(400).json({ status: "error", message: "Invalid code verifier" });
-        }
-    }
+    const saved_code_verifier = pending.code_verifier;
 
     await supabase.from('auth_state').delete().eq('state', state);
 
@@ -184,7 +175,7 @@ app.get('/auth/github/callback', async (req, res) => {
             client_id: process.env.GITHUB_CLIENT_ID,
             client_secret: process.env.GITHUB_CLIENT_SECRET,
             code,
-            code_verifier
+            code_verifier: saved_code_verifier
         })
     });
         const tokenData = await tokenResponse.json();
