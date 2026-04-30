@@ -1,3 +1,6 @@
+Backend Repository (User Profiler API)
+The User Profiler API serves as the central authentication and data management hub for the entire system. It is built using Node.js and Express, integrating with Supabase to handle user data and session states through a Proof Key for Code Exchange (PKCE) flow. The backend is responsible for initiating the GitHub OAuth process, securely storing the code verifier in a Supabase table, and exchanging authorization codes for access tokens. It issues JSON Web Tokens with strict lifespans, specifically setting access tokens to three minutes and refresh tokens to five minutes to maintain a high security posture. All communication with the database is managed through the Supabase client library, ensuring that user profiles are upserted correctly upon successful authentication.
+
 Natural Language Parsing
 
 1. Parsing Approach
