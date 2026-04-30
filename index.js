@@ -24,7 +24,7 @@ app.use(logger);
 app.use(cookieParser());
 
 app.use(cors({
-    origin: 'https://insighta-web.vercel.app', 
+    origin: 'https://insighta-web-rho.vercel.app/', 
     credentials: true 
 }));
 
@@ -167,7 +167,7 @@ app.get('/auth/github/callback', async (req, res) => {
             { expiresIn: '5m' }
         );
 
-        const cliRedirect = `https://insighta-backend.vercel.app?access_token=${accessToken}&refresh_token=${refreshToken}`;
+        const cliRedirect = `https://user-profiler-api.vercel.app?access_token=${accessToken}&refresh_token=${refreshToken}`;
         console.log('Redirecting to CLI:', cliRedirect);
         res.redirect(cliRedirect);
 
@@ -178,7 +178,7 @@ app.get('/auth/github/callback', async (req, res) => {
         maxAge: 3 * 60 * 1000 // 3 minutes
     });
 
-    return res.redirect('https://insighta-web.vercel.app/dashboard');
+    return res.redirect('https://insighta-web-rho.vercel.app/dashboard');
 
     } catch (err) {
         console.error("Auth Error:", err);
