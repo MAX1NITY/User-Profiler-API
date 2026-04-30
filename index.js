@@ -24,7 +24,7 @@ app.use(logger);
 app.use(cookieParser());
 
 app.use(cors({
-    origin: 'https://insighta-web-rho.vercel.app/', 
+    origin: 'https://insighta-web-rho.vercel.app', 
     credentials: true 
 }));
 
@@ -50,7 +50,7 @@ app.get('/auth/github', (req, res) => {
     const rootUrl = 'https://github.com/login/oauth/authorize';
     const options = {
         client_id: process.env.GITHUB_CLIENT_ID,
-        redirect_uri: 'http://localhost:8000/auth/github/callback',
+        redirect_uri: 'https://user-profiler-api.vercel.app/auth/github/callback',
         scope: 'user:email',
     };
     const queryString = new URLSearchParams(options).toString();
@@ -158,27 +158,32 @@ app.get('/auth/github/callback', async (req, res) => {
         const accessToken = jwt.sign(
             { id: user.id, role: user.role },
             process.env.JWT_SECRET,
-            { expiresIn: '3m' }
+            { expiresIn: '15m' } // bumped up slightly for stability
         );
 
         const refreshToken = jwt.sign(
             { id: user.id },
-            process.env.JWT_REFRESH_SECRET, // You'll need a second secret in .env
-            { expiresIn: '5m' }
+            process.env.JWT_REFRESH_SECRET,
+            { expiresIn: '7d' }
         );
 
-        const cliRedirect = `https://user-profiler-api.vercel.app?access_token=${accessToken}&refresh_token=${refreshToken}`;
-        console.log('Redirecting to CLI:', cliRedirect);
-        res.redirect(cliRedirect);
+        // Check if the request came from the CLI (usually via a 'state' query param)
+        if (req.query.state === 'cli') {
+            const cliRedirect = `http://localhost:8080?access_token=${accessToken}&refresh_token=${refreshToken}`;
+            console.log('Redirecting to CLI:', cliRedirect);
+            return res.redirect(cliRedirect);
+        }
 
-        res.cookie('access_token', access_token, {
-        httpOnly: true,
-        secure: true, // Set to true in production/HTTPS
-        sameSite: 'none',
-        maxAge: 3 * 60 * 1000 // 3 minutes
-    });
+        // If not CLI, it's the Web Portal. Set the cookie and redirect to Dashboard.
+        res.cookie('access_token', accessToken, {
+            httpOnly: true,
+            secure: true, 
+            sameSite: 'none',
+            maxAge: 15 * 60 * 1000 
+        });
 
-    return res.redirect('https://insighta-web-rho.vercel.app/dashboard');
+        console.log('Redirecting to Web Portal Dashboard');
+        return res.redirect('https://insighta-web-rho.vercel.app/dashboard');
 
     } catch (err) {
         console.error("Auth Error:", err);
