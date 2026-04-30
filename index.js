@@ -59,7 +59,7 @@ app.use('/auth', authLimiter);
 
 app.use('/api', generalLimiter, versionCheck);
 
-app.get('/auth/github', (req, res) => {
+app.get('/auth/github', async (req, res) => {
     const { state, code_challenge, code_challenge_method } = req.query;
 
     if (state && code_challenge) {
