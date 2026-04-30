@@ -5,6 +5,7 @@ const logger = require('./middleware/logger');
 const { authLimiter, generalLimiter } = require('./middleware/rateLimiter');
 const versionCheck = require('./middleware/versionCheck');
 const app = express();
+app.set('trust proxy', 1);
 const fetch = require('node-fetch');
 const crypto = require('crypto');
 const PORT = process.env.PORT || 8000;
@@ -16,6 +17,7 @@ const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 const jwt = require('jsonwebtoken');
 const { Parser } = require('json2csv');
+const pendingAuth = new Map();
 
 
 
@@ -46,12 +48,34 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+const requireRole = (role) => (req, res, next) => {
+    if (!req.user || req.user.role !== role) {
+        return res.status(403).json({ status: "error", message: "Forbidden" });
+    }
+    next();
+};
+
+app.use('/auth', authLimiter);
+
+app.use('/api', generalLimiter, versionCheck);
+
 app.get('/auth/github', (req, res) => {
+    const { state, code_challenge, code_challenge_method } = req.query;
+
+    if (state && code_challenge) {
+            await supabase.from('auth_state').insert({
+                state,
+                code_challenge,
+                expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+            });
+        }
+
     const rootUrl = 'https://github.com/login/oauth/authorize';
     const options = {
         client_id: process.env.GITHUB_CLIENT_ID,
         redirect_uri: 'https://user-profiler-api.vercel.app/auth/github/callback',
         scope: 'user:email',
+        state: state || crypto.randomBytes(16).toString('hex')
     };
     const queryString = new URLSearchParams(options).toString();
     res.redirect(`${rootUrl}?${queryString}`);
@@ -117,8 +141,36 @@ app.post('/auth/github/callback', async (req, res) => {
 });
 
 app.get('/auth/github/callback', async (req, res) => {
-    const { code, code_verifier } = req.query;
+    const { code, state, code_verifier } = req.query;
     console.log("Callback received with code:", code);
+
+    if (!state) {
+        return res.status(400).json({ status: "error", message: "Missing state parameter" });
+    }
+
+    const { data: pending } = await supabase
+        .from('auth_state')
+        .select('*')
+        .eq('state', state)
+        .single();
+
+    if (!pending || new Date(pending.expires_at) < new Date()) {
+        return res.status(400).json({ status: "error", message: "Invalid or expired state" });
+    }
+
+    if (code_verifier) {
+        const expectedChallenge = crypto
+            .createHash('sha256')
+            .update(code_verifier)
+            .digest('base64url');
+
+        if (expectedChallenge !== pending.code_challenge) {
+            pendingAuth.delete(state);
+            return res.status(400).json({ status: "error", message: "Invalid code verifier" });
+        }
+    }
+
+    await supabase.from('auth_state').delete().eq('state', state);
 
     if (!code) {
         return res.status(400).json({ status: "error", message: "No code from GitHub" });
@@ -203,11 +255,12 @@ app.post('/auth/refresh', async (req, res) => {
         const decoded = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
         
         // 2. Get user from DB to make sure they are still active
-        const { data: user } = await supabase.from('users').select('*').eq('id', decoded.id).single();
-        
-        if (!user || !user.is_active) {
-            return res.status(403).json({ status: "error", message: "User inactive or not found" });
-        }
+            const { data: user, error: userError } = await supabase
+    .from('users').select('*').eq('id', decoded.id).single();
+
+    if (userError || !user) {
+    return res.status(403).json({ status: "error", message: "User not found" });
+    }
 
         // 3. Issue NEW pair (Token Rotation)
         const newAccessToken = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '3m' });
@@ -230,9 +283,7 @@ app.post('/auth/logout', (req, res) => {
     });
 });
 
-app.use('/auth', authLimiter);
 
-app.use('/api', generalLimiter, versionCheck);
 
 // app.use('/auth', authRoutes);
 
@@ -449,23 +500,50 @@ app.get(['/api/profiles/search', '/api/classify'], authenticateToken, async (req
     }
 });
 
-app.get('/api/profiles/export', authenticateToken, async (req, res) => {
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({ 
-            status: "error", 
-            message: "Forbidden: Admin access required" 
-        });
-    }
-
+app.get('/api/profiles/export', authenticateToken, requireRole('admin'), async (req, res) => {
     try {
-        const { data: profiles, error } = await supabase.from('profiles').select('*');
+        // Pull the same filter params as GET /api/profiles
+        let { gender, country_id, age_group, min_age, max_age, sort_by, order } = req.query;
+
+        const validSorts = ['age', 'gender_probability', 'created_at', 'name'];
+        const sortBy = validSorts.includes(sort_by) ? sort_by : 'created_at';
+        const isAscending = order === 'asc';
+
+        // Build the query the same way GET /api/profiles does
+        let query = supabase
+            .from('profiles')
+            .select('id, name, gender, gender_probability, age, age_group, country_id, country_name, country_probability, created_at')
+            .order(sortBy, { ascending: isAscending });
+
+        if (gender)     query = query.ilike('gender', gender);
+        if (country_id) query = query.ilike('country_id', country_id);
+        if (age_group)  query = query.ilike('age_group', age_group);
+        if (min_age)    query = query.gte('age', parseInt(min_age));
+        if (max_age)    query = query.lte('age', parseInt(max_age));
+
+        const { data: profiles, error } = await query;
         if (error) throw error;
 
-        const json2csvParser = new Parser();
+        // Exact column order required by the spec
+        const fields = [
+            'id',
+            'name', 
+            'gender',
+            'gender_probability',
+            'age',
+            'age_group',
+            'country_id',
+            'country_name',
+            'country_probability',
+            'created_at'
+        ];
+
+        const json2csvParser = new Parser({ fields });
         const csv = json2csvParser.parse(profiles);
 
+        // Timestamp in filename as required
         res.header('Content-Type', 'text/csv');
-        res.attachment('profiles_export.csv');
+        res.attachment(`profiles_${Date.now()}.csv`);
         return res.send(csv);
 
     } catch (err) {
@@ -474,16 +552,8 @@ app.get('/api/profiles/export', authenticateToken, async (req, res) => {
 });
 
 
-app.post(['/api/profiles', '/api/classify'], authenticateToken, async (req, res) => {
+app.post(['/api/profiles', '/api/classify'], authenticateToken, requireRole('admin'), async (req, res) => {
     try{
-
-        if (req.user.role !== 'admin') {
-        return res.status(403).json({ 
-            status: "error", 
-            message: "Forbidden: Admin access required" 
-        });
-    }
-
         const name = req.body.name
 
         if (!req.body || !isNaN(name)) {
@@ -680,15 +750,8 @@ app.get(['/api/profiles/:id', '/api/classify/:id'], authenticateToken, async (re
     })
 })
 
-app.delete(['/api/profiles/:id', '/api/classify/:id'], authenticateToken, async (req, res) => {
+app.delete(['/api/profiles/:id', '/api/classify/:id'], authenticateToken, requireRole('admin'), async (req, res) => {
     const { id } = req.params;
-
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({ 
-            status: "error", 
-            message: "Forbidden: Admin access required" 
-        });
-    }
     
     const { data: profile } = await supabase
         .from("profiles")
