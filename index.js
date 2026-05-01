@@ -17,7 +17,7 @@ const supabaseKey = process.env.SUPABASE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 const jwt = require('jsonwebtoken');
 const { Parser } = require('json2csv');
-const pendingAuth = new Map();
+// const pendingAuth = new Map();
 
 
 
@@ -61,94 +61,100 @@ app.use('/api', generalLimiter, versionCheck);
 
 app.get('/auth/github', async (req, res) => {
     const state = req.query.state || crypto.randomBytes(16).toString('hex');
-    const code_verifier = req.query.code_verifier;
+    const code_challenge = req.query.code_challenge; // CLI sends this, web sends nothing
 
-    if (state && code_verifier) {
-            await supabase.from('auth_state').insert({
-                state: state,
-                code_verifier: code_verifier,
-                expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
-            });
-        }
+    // Always store — web flow stores with null code_challenge
+    const { error: insertError } = await supabase.from('auth_state').insert({
+        state: state,
+        code_challenge: code_challenge || null,
+        expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+    });
+
+    if (insertError) {
+        console.error('Failed to store auth state:', insertError);
+        return res.status(500).json({ status: "error", message: "Failed to initiate auth" });
+    }
 
     const rootUrl = 'https://github.com/login/oauth/authorize';
     const options = {
         client_id: process.env.GITHUB_CLIENT_ID,
         redirect_uri: 'https://user-profiler-api.vercel.app/auth/github/callback',
         scope: 'user:email',
-        state: state || crypto.randomBytes(16).toString('hex')
+        state: state
     };
     const queryString = new URLSearchParams(options).toString();
     res.redirect(`${rootUrl}?${queryString}`);
 });
 
-app.post('/auth/github/callback', async (req, res) => {
-    const { code, code_verifier } = req.body;
+// app.post('/auth/github/callback', async (req, res) => {
+//     const { code, code_verifier } = req.body;
 
-    if (!code || !code_verifier) {
-        return res.status(400).json({ status: 'error', message: 'Code and Verifier required' });
-    }
+//     if (!code || !code_verifier) {
+//         return res.status(400).json({ status: 'error', message: 'Code and Verifier required' });
+//     }
 
-    try {
-        // 1. Exchange the 'code' for a GitHub Access Token
-        // This proves to GitHub that the user actually logged in
-        const githubResponse = await axios.post('https://github.com/login/oauth/access_token', {
-            client_id: process.env.GITHUB_CLIENT_ID,
-            client_secret: process.env.GITHUB_CLIENT_SECRET,
-            code: code,
-        }, {
-            headers: { Accept: 'application/json' }
-        });
+//     try {
+//         // 1. Exchange the 'code' for a GitHub Access Token
+//         // This proves to GitHub that the user actually logged in
+//         const githubResponse = await axios.post('https://github.com/login/oauth/access_token', {
+//             client_id: process.env.GITHUB_CLIENT_ID,
+//             client_secret: process.env.GITHUB_CLIENT_SECRET,
+//             code: code,
+//         }, {
+//             headers: { Accept: 'application/json' }
+//         });
 
-        const githubToken = githubResponse.data.access_token;
+//         const githubToken = githubResponse.data.access_token;
 
-        // 2. Get User Info from GitHub
-        const userResponse = await axios.get('https://api.github.com/user', {
-            headers: { Authorization: `token ${githubToken}` }
-        });
+//         // 2. Get User Info from GitHub
+//         const userResponse = await axios.get('https://api.github.com/user', {
+//             headers: { Authorization: `token ${githubToken}` }
+//         });
 
-        const { id, login, email, avatar_url } = userResponse.data;
+//         const { id, login, email, avatar_url } = userResponse.data;
 
-        // 3. Upsert User in Supabase (Create or Update)
-        const { data: user, error } = await supabase
-            .from('users')
-            .upsert({ 
-                github_id: id.toString(), 
-                username: login, 
-                email, 
-                avatar_url,
-                last_login_at: new Date() 
-            }, { onConflict: 'github_id' })
-            .select()
-            .single();
+//         // 3. Upsert User in Supabase (Create or Update)
+//         const { data: user, error } = await supabase
+//             .from('users')
+//             .upsert({ 
+//                 github_id: id.toString(), 
+//                 username: login, 
+//                 email, 
+//                 avatar_url,
+//                 last_login_at: new Date() 
+//             }, { onConflict: 'github_id' })
+//             .select()
+//             .single();
 
-        if (error) throw error;
+//         if (error) throw error;
 
-        // 4. Generate YOUR System's Tokens (JWT)
-        const access_token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '3m' });
-        const refresh_token = jwt.sign({ id: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: '5m' });
+//         // 4. Generate YOUR System's Tokens (JWT)
+//         const access_token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '3m' });
+//         const refresh_token = jwt.sign({ id: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: '5m' });
 
-        // 5. Send tokens back to the CLI
-        res.json({
-            status: 'success',
-            access_token,
-            refresh_token
-        });
+//         // 5. Send tokens back to the CLI
+//         res.json({
+//             status: 'success',
+//             access_token,
+//             refresh_token
+//         });
 
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ status: 'error', message: 'Authentication failed' });
-    }
-});
+//     } catch (err) {
+//         console.error(err);
+//         res.status(500).json({ status: 'error', message: 'Authentication failed' });
+//     }
+// });
 
 app.get('/auth/github/callback', async (req, res) => {
-    const { code, state } = req.query;
+    const { code, state, code_verifier } = req.query;
     console.log("Callback received with code:", code);
 
+    // 1. Validate state exists
     if (!state) {
         return res.status(400).json({ status: "error", message: "Missing state parameter" });
     }
 
+    // 2. Look up state in Supabase
     const { data: pending, error: dbError } = await supabase
         .from('auth_state')
         .select('*')
@@ -159,8 +165,28 @@ app.get('/auth/github/callback', async (req, res) => {
         return res.status(400).json({ status: "error", message: "Invalid or expired state" });
     }
 
-    const saved_code_verifier = pending.code_verifier;
+    // 3. Validate PKCE if this was a CLI flow (code_challenge was stored)
+    if (pending.code_challenge) {
+        if (!code_verifier) {
+            await supabase.from('auth_state').delete().eq('state', state);
+            return res.status(400).json({ status: "error", message: "Code verifier required" });
+        }
 
+        const expectedChallenge = crypto
+            .createHash('sha256')
+            .update(code_verifier)
+            .digest('base64url');
+
+        if (expectedChallenge !== pending.code_challenge) {
+            await supabase.from('auth_state').delete().eq('state', state);
+            return res.status(400).json({ status: "error", message: "Invalid code verifier" });
+        }
+    }
+
+    // 4. Detect if CLI flow — check BEFORE deleting pending
+    const isCli = !!pending.code_challenge;
+
+    // 5. Clean up — single use
     await supabase.from('auth_state').delete().eq('state', state);
 
     if (!code) {
@@ -168,23 +194,31 @@ app.get('/auth/github/callback', async (req, res) => {
     }
 
     try {
+        // 6. Exchange code with GitHub
         const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-            client_id: process.env.GITHUB_CLIENT_ID,
-            client_secret: process.env.GITHUB_CLIENT_SECRET,
-            code,
-            code_verifier: saved_code_verifier
-        })
-    });
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+                client_id: process.env.GITHUB_CLIENT_ID,
+                client_secret: process.env.GITHUB_CLIENT_SECRET,
+                code,
+                // Only send code_verifier if CLI flow
+                ...(isCli && code_verifier ? { code_verifier } : {})
+            })
+        });
         const tokenData = await tokenResponse.json();
 
+        if (!tokenData.access_token) {
+            return res.status(400).json({ status: "error", message: "Failed to get GitHub token" });
+        }
+
+        // 7. Get GitHub user info
         const userRes = await fetch('https://api.github.com/user', {
             headers: { Authorization: `Bearer ${tokenData.access_token}` }
         });
         const githubUser = await userRes.json();
 
+        // 8. Upsert user in Supabase
         const { data: user, error } = await supabase
             .from('users')
             .upsert({
@@ -198,31 +232,40 @@ app.get('/auth/github/callback', async (req, res) => {
 
         if (error) throw error;
 
+        // 9. Issue tokens — use spec-required expiry times
         const accessToken = jwt.sign(
             { id: user.id, role: user.role },
             process.env.JWT_SECRET,
-            { expiresIn: '15m' } // bumped up slightly for stability
+            { expiresIn: '3m' }  // spec says 3 minutes
         );
 
         const refreshToken = jwt.sign(
             { id: user.id },
             process.env.JWT_REFRESH_SECRET,
-            { expiresIn: '7d' }
+            { expiresIn: '5m' }  // spec says 5 minutes
         );
 
-        // Check if the request came from the CLI (usually via a 'state' query param)
-        if (req.query.state === 'cli') {
-            const cliRedirect = `http://localhost:8080?access_token=${accessToken}&refresh_token=${refreshToken}`;
+        // 10. Respond differently based on flow
+        if (isCli) {
+            // CLI — redirect to local callback server with tokens in URL
+            const cliRedirect = `http://localhost:3000?access_token=${accessToken}&refresh_token=${refreshToken}`;
             console.log('Redirecting to CLI:', cliRedirect);
             return res.redirect(cliRedirect);
         }
 
-        // If not CLI, it's the Web Portal. Set the cookie and redirect to Dashboard.
+        // Web — set HttpOnly cookie and redirect to dashboard
         res.cookie('access_token', accessToken, {
             httpOnly: true,
-            secure: true, 
+            secure: true,
             sameSite: 'none',
-            maxAge: 15 * 60 * 1000 
+            maxAge: 3 * 60 * 1000  // 3 minutes, matches token expiry
+        });
+
+        res.cookie('refresh_token', refreshToken, {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'none',
+            maxAge: 5 * 60 * 1000  // 5 minutes, matches token expiry
         });
 
         console.log('Redirecting to Web Portal Dashboard');
@@ -280,13 +323,13 @@ app.post('/auth/logout', (req, res) => {
 
 
 
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    if (req.method === 'OPTIONS') return res.status(200).end();
-    next();
-});
+// app.use((req, res, next) => {
+//     res.header('Access-Control-Allow-Origin', '*');
+//     res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+//     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+//     if (req.method === 'OPTIONS') return res.status(200).end();
+//     next();
+// });
 
 app.get('/', (req, res) => {
     res.status(200).json({ status: "success", message: "Name Profiler API is ready" });
